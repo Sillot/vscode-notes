@@ -50,6 +50,12 @@
 					"default": "*",
 					"description": "A comma separated list of allowed extensions for notes. Use '*' (asterisk) to allow all file types. (do not include the dot or spaces)"
 				},
+				"notes.storeLocationInWorkspace": {
+					"type": "boolean",
+					"default": true,
+					"scope": "application",
+					"description": "Save the storage location you pick in the settings of the workspace, in its .vscode/settings.json, so a folder of notes can travel with the project. Turn this off to keep the location in your own editor settings instead, and out of a file that may be committed. This setting is yours rather than a workspace's, so no repository can change it."
+				},
 				"notes.watchExternalChanges": {
 					"type": "boolean",
 					"default": true,

@@ -157,6 +157,24 @@ export class Notes {
 		return vscode.workspace.getConfiguration('notes').get('notesExtensions');
 	}
 
+	/*
+	 * Where a newly picked storage location is written.
+	 *
+	 * The workspace keeps it in .vscode/settings.json, which is convenient for a
+	 * folder of notes that belongs with the project, but it is also a file that
+	 * usually ends up committed, carrying a personal path with it. Turning the
+	 * setting off keeps the location in the editor's own settings instead.
+	 */
+	static getLocationTarget(): vscode.ConfigurationTarget {
+		const storeInWorkspace = vscode.workspace.getConfiguration('notes').get<boolean>('storeLocationInWorkspace', true);
+		// there is nothing to write a workspace setting into without a workspace
+		const hasWorkspace = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
+
+		return storeInWorkspace && hasWorkspace
+			? vscode.ConfigurationTarget.Workspace
+			: vscode.ConfigurationTarget.Global;
+	}
+
 	// delete note
 	static deleteNote(note: Note, tree: NotesViewProvider): void {
 		// prompt user for confirmation
@@ -529,11 +547,16 @@ export class Notes {
 				let notesConfiguration = vscode.workspace.getConfiguration('notes');
 				// set the selected location
 				let selectedLocation = path.normalize(fileUri[0].fsPath);
+				// where the setting is written, the workspace or the editor itself
+				let target = Notes.getLocationTarget();
+
 				// update Notes configuration with selected location
-				notesConfiguration.update('notesLocation', selectedLocation, true).then(() => {
+				notesConfiguration.update('notesLocation', selectedLocation, target).then(() => {
 					// apply the new location right away, no window reload needed
 					tree?.updateConfiguration(selectedLocation, String(Notes.getNotesExtensions()));
-					vscode.window.showInformationMessage(`Notes are now stored in '${selectedLocation}'.`);
+
+					let savedIn = target === vscode.ConfigurationTarget.Workspace ? 'workspace' : 'user';
+					vscode.window.showInformationMessage(`Notes are now stored in '${selectedLocation}', saved in the ${savedIn} settings.`);
 				});
 			}
 		});

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * the Notes view now refreshes on its own when notes are added, renamed or removed outside of the window, by a sync client or another editor. Open folders are checked on an interval, which is what covers synced and Windows folders where no file system event ever arrives. Two new settings: `notes.watchExternalChanges` and `notes.watchIntervalSeconds`.
 * `Reveal in File Explorer` on the right click menu of a note or a folder, and on the view menu for the storage location itself
+* `notes.storeLocationInWorkspace`, on by default, to choose whether a storage location you pick is saved in the workspace settings or in your own editor settings. Turning it off keeps a personal path out of a `.vscode/settings.json` that may be committed.
 
 ### Changed
 
