@@ -9,6 +9,7 @@ export class NotesViewProvider implements vscode.TreeDataProvider<Note> {
     private _onDidChangeTreeData: vscode.EventEmitter<Note | undefined> = new vscode.EventEmitter<Note | undefined>();
     readonly onDidChangeTreeData: vscode.Event<Note | undefined> = this._onDidChangeTreeData.event;
     private folderMap: Map<string, Note[]> = new Map<string, Note[]>();
+    private expandedFolders: Set<string> = new Set<string>();
 
     // constructor for NotesViewProvider
     constructor(
@@ -20,6 +21,102 @@ export class NotesViewProvider implements vscode.TreeDataProvider<Note> {
     public init(): NotesViewProvider {
         this.refresh();
         return this;
+    }
+
+    // apply a new notes location and/or extension list without a window reload
+    public updateConfiguration(notesLocation: string, notesExtensions: string): void {
+        // if nothing actually changed there is nothing to do
+        if (this.notesLocation === notesLocation && this.notesExtensions === notesExtensions) {
+            return;
+        }
+
+        this.notesLocation = notesLocation;
+        this.notesExtensions = notesExtensions;
+
+        // drop any cached folder contents from the previous location
+        this.folderMap.clear();
+        // the folders of the previous location are gone, expanded or not
+        this.expandedFolders.clear();
+
+        // refresh the tree so the new configuration takes effect
+        this.refresh();
+    }
+
+    // remember which folders are open, they are the ones worth watching
+    public setExpanded(note: Note, expanded: boolean): void {
+        if (expanded) {
+            this.expandedFolders.add(note.fullPath);
+        } else {
+            this.expandedFolders.delete(note.fullPath);
+        }
+    }
+
+    /*
+     * Signature of everything the tree currently displays.
+     *
+     * Only the open folders are read: a collapsed folder shows nothing, so a
+     * change inside it cannot be visible either. The signature holds names and
+     * not modification times because the tree renders names, so editing a note
+     * leaves it untouched while adding, renaming or deleting one changes it.
+     */
+    public async snapshot(): Promise<string> {
+        if (!this.notesLocation) {
+            return '';
+        }
+
+        const sections: string[] = [];
+
+        for (const directory of [this.notesLocation, ...this.expandedFolders]) {
+            const signature = await this.readDirectorySignature(directory);
+
+            if (signature === undefined) {
+                // gone or unreadable: it displays nothing, and an open folder that
+                // disappeared is not worth reading on every poll from now on
+                this.expandedFolders.delete(directory);
+                continue;
+            }
+
+            sections.push(`${directory}\n${signature}`);
+        }
+
+        return sections.join('\n');
+    }
+
+    // list the entries of a single directory the way getNotes would show them
+    private async readDirectorySignature(directory: string): Promise<string | undefined> {
+        try {
+            const items = await fs.promises.readdir(directory, { withFileTypes: true });
+
+            return items
+                .filter(item => item.isDirectory() || this.isNote(item.name))
+                .map(item => (item.isDirectory() ? `d:${item.name}` : `f:${item.name}`))
+                .sort()
+                .join('\n');
+        } catch (err) {
+            return undefined;
+        }
+    }
+
+    // does this file name belong in the tree, given the configured extensions?
+    private isNote(name: string): boolean {
+        // glob leaves dotfiles out, so the signature has to leave them out too
+        if (name.startsWith('.')) {
+            return false;
+        }
+        if (this.notesExtensions === '*') {
+            return true;
+        }
+
+        const extension = path.extname(name).replace('.', '').toLowerCase();
+        // an extensionless file has nothing to match against the allowed list
+        if (!extension) {
+            return false;
+        }
+
+        return this.notesExtensions
+            .split(',')
+            .map(allowed => allowed.trim().toLowerCase())
+            .includes(extension);
     }
 
     // refresh the tree view

@@ -1,9 +1,10 @@
-// figure out how to reload treeview when notes location changes
 import * as vscode from 'vscode';
+import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Note } from './note';
 import { NotesViewProvider } from './notesViewProvider';
+import { initNotesWatcher, rebaselineWatcher, restartNotesWatcher, setNotesVisible } from './notesWatcher';
 
 let extId = 'vscode-notes';
 let extPub = 'dionmunk';
@@ -15,23 +16,42 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// get Notes configuration
 	let notesTree = new NotesViewProvider(String(Notes.getNotesLocation()), String(Notes.getNotesExtensions()));
-	vscode.window.registerTreeDataProvider('notes', notesTree.init());
+	// a tree view rather than a plain provider, the watcher needs to know which folders are open
+	let notesView = vscode.window.createTreeView('notes', { treeDataProvider: notesTree.init() });
+	context.subscriptions.push(notesView);
+
+	context.subscriptions.push(
+		// an opened folder joins what is watched, a closed one leaves it
+		notesView.onDidExpandElement(e => {
+			notesTree.setExpanded(e.element, true);
+			rebaselineWatcher();
+		}),
+		notesView.onDidCollapseElement(e => {
+			notesTree.setExpanded(e.element, false);
+			rebaselineWatcher();
+		}),
+		// nothing to poll for while the view is hidden
+		notesView.onDidChangeVisibility(e => setNotesVisible(e.visible)),
+		// the tree was just rebuilt, take what is on disk now as the new reference
+		notesTree.onDidChangeTreeData(() => rebaselineWatcher())
+	);
+
+	// keep the tree in sync with changes made outside of this window
+	initNotesWatcher(context, notesTree);
 
 	// Listen for configuration changes
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(e => {
-			// Check if notes.notesLocation setting changed
-			if (e.affectsConfiguration('notes.notesLocation')) {
-				// Prompt to reload window so storage location change can take effect
-				vscode.window.showWarningMessage(
-					`The Notes extension detected a change in the storage location. You must reload the window for the change to take effect.`,
-					'Reload'
-				).then(selectedAction => {
-					// if the user selected to reload the window then reload
-					if (selectedAction === 'Reload') {
-						vscode.commands.executeCommand('workbench.action.reloadWindow');
-					}
-				});
+			// Check if a setting that affects the tree view changed
+			if (e.affectsConfiguration('notes.notesLocation') || e.affectsConfiguration('notes.notesExtensions')) {
+				// apply the change to the tree view directly, no window reload needed
+				notesTree.updateConfiguration(String(Notes.getNotesLocation()), String(Notes.getNotesExtensions()));
+			}
+			// point the watcher at the new location, or apply the new watch settings
+			if (e.affectsConfiguration('notes.notesLocation')
+				|| e.affectsConfiguration('notes.watchExternalChanges')
+				|| e.affectsConfiguration('notes.watchIntervalSeconds')) {
+				restartNotesWatcher();
 			}
 		})
 	);
@@ -94,9 +114,15 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 	context.subscriptions.push(renameFolderDisposable);
 
+	// reveal in the OS file explorer
+	let revealInOSDisposable = vscode.commands.registerCommand('Notes.revealInOS', (item?: Note) => {
+		Notes.revealInOS(item);
+	});
+	context.subscriptions.push(revealInOSDisposable);
+
 	// setup notes
 	let setupNotesDisposable = vscode.commands.registerCommand('Notes.setupNotes', () => {
-		Notes.setupNotes();
+		Notes.setupNotes(notesTree);
 	});
 	context.subscriptions.push(setupNotesDisposable);
 
@@ -147,9 +173,10 @@ export class Notes {
 					}
 					// else let the user know the file was deleted successfully
 					vscode.window.showInformationMessage(`Successfully deleted ${note.name}.`);
+
+					// refresh tree after deleting note
+					tree.refresh();
 				});
-				// refresh tree after deleting note
-				tree.refresh();
 			}
 		});
 	}
@@ -243,6 +270,9 @@ export class Notes {
 						return vscode.window.showErrorMessage('Failed to create the new note.');
 					}
 					else {
+						// refresh tree after creating new note
+						tree.refresh();
+
 						// open file
 						let file = vscode.Uri.file(filePath);
 						vscode.window.showTextDocument(file).then(() => {
@@ -251,8 +281,6 @@ export class Notes {
 						});
 					}
 				});
-				// refresh tree after creating new note
-				tree.refresh();
 			}
 			else {
 				// report
@@ -292,10 +320,11 @@ export class Notes {
 					}
 					else {
 						vscode.window.showInformationMessage(`Successfully created folder ${folderName}.`);
+
+						// refresh tree after creating new folder
+						tree.refresh();
 					}
 				});
-				// refresh tree after creating new folder
-				tree.refresh();
 			}
 			else {
 				// report
@@ -326,6 +355,54 @@ export class Notes {
 
 		// Open the document
 		vscode.window.showTextDocument(vscode.Uri.file(filePath));
+	}
+
+	// reveal a note or folder in the file explorer of the operating system
+	static revealInOS(item?: Note): void {
+		// the view title action carries no note, fall back to the storage location
+		let target = item?.fullPath ?? String(Notes.getNotesLocation());
+		// a folder is opened, a note is revealed inside the folder holding it
+		let isFolder = item ? item.isFolder : true;
+
+		if (!target) {
+			vscode.window.showWarningMessage('No storage location has been selected yet.');
+			return;
+		}
+
+		/*
+		 * On WSL the extension runs on the Linux side while the file explorer is
+		 * the Windows one. The built-in command would hand it a path like
+		 * /mnt/c/Users/… , which means nothing to Windows, so the path is
+		 * translated and Explorer called directly.
+		 */
+		if (vscode.env.remoteName === 'wsl') {
+			Notes.revealInWindowsExplorer(target, isFolder);
+			return;
+		}
+
+		vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(target)).then(undefined, err => {
+			console.error(err);
+			vscode.window.showErrorMessage(`Failed to reveal '${target}' in the file explorer.`);
+		});
+	}
+
+	// reveal a path in the Windows file explorer, from the Linux side of WSL
+	private static revealInWindowsExplorer(target: string, isFolder: boolean): void {
+		cp.execFile('wslpath', ['-w', target], (err, stdout) => {
+			if (err) {
+				console.error(err);
+				vscode.window.showErrorMessage(`Failed to translate '${target}' to a Windows path.`);
+				return;
+			}
+
+			let windowsPath = stdout.trim();
+			// /select, takes its path in the same argument, and reveals rather than opens
+			let argument = isFolder ? windowsPath : `/select,${windowsPath}`;
+
+			// Explorer reports a non zero exit code even when it worked, so there is
+			// nothing here worth reporting to the user
+			cp.execFile('explorer.exe', [argument], () => { });
+		});
 	}
 
 	// refresh notes
@@ -450,18 +527,13 @@ export class Notes {
 			if (fileUri && fileUri[0]) {
 				// get Notes configuration
 				let notesConfiguration = vscode.workspace.getConfiguration('notes');
+				// set the selected location
+				let selectedLocation = path.normalize(fileUri[0].fsPath);
 				// update Notes configuration with selected location
-				notesConfiguration.update('notesLocation', path.normalize(fileUri[0].fsPath), true).then(() => {
-					// prompt to reload window so storage location change can take effect
-					vscode.window.showWarningMessage(
-						`The Notes extension detected a change in the storage location. You must reload the window for the change to take effect.`,
-						'Reload'
-					).then(selectedAction => {
-						// if the user selected to reload the window then reload
-						if (selectedAction === 'Reload') {
-							vscode.commands.executeCommand('workbench.action.reloadWindow');
-						}
-					});
+				notesConfiguration.update('notesLocation', selectedLocation, true).then(() => {
+					// apply the new location right away, no window reload needed
+					tree?.updateConfiguration(selectedLocation, String(Notes.getNotesExtensions()));
+					vscode.window.showInformationMessage(`Notes are now stored in '${selectedLocation}'.`);
 				});
 			}
 		});

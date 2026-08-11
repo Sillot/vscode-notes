@@ -8,6 +8,7 @@
 		],
 		"sourceMap": true,
 		"rootDir": "src",
+		"skipLibCheck": true, /* don't type-check dependency .d.ts files, glob's lru-cache conflicts with the es6 lib */
 		"strict": true, /* enable all strict type-checking options */
 		"esModuleInterop": true, /* Enables emit interoperability between CommonJS and ES Modules */
 		"typeRoots": [

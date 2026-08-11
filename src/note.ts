@@ -21,6 +21,10 @@ export class Note extends vscode.TreeItem {
 		this.isFolder = isDirectory;
 		this.fullPath = path.join(location, name);
 
+		// a stable id lets VS Code keep folders expanded and items selected across
+		// a refresh, which an auto-refreshing tree does behind the user's back
+		this.id = this.fullPath;
+
 		// Set appropriate icon based on whether this is a folder or file
 		if (isDirectory) {
 			// Use VS Code's built-in folder icons

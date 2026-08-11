@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* the Notes view now refreshes on its own when notes are added, renamed or removed outside of the window, by a sync client or another editor. Open folders are checked on an interval, which is what covers synced and Windows folders where no file system event ever arrives. Two new settings: `notes.watchExternalChanges` and `notes.watchIntervalSeconds`.
+* `Reveal in File Explorer` on the right click menu of a note or a folder, and on the view menu for the storage location itself
+
+### Changed
+
+* changing the storage location or the allowed extensions now updates the Notes view right away, a window reload is no longer required
+
+### Fixed
+
+* the Notes view is now refreshed once a note or folder has actually been created or deleted, instead of before the write completes
+* notes and folders added or removed outside of the extension now show up in the Notes view without a reload
+
 ## [2.0.0] - 2025-03-26
 
 ### Added
